@@ -7,6 +7,8 @@ import requests
 from googleapiclient.discovery import build
 import spacy
 from bs4 import BeautifulSoup
+from spanbert import SpanBERT
+from spacy_help_functions import get_entities, create_entity_pairs
 
 
 exclude_filetype = ['jpg', 'jpeg', 'png', 'gif', 'tiff', 'psd', 'pdf', 'eps', 'ai', 'indd', 'raw']
@@ -18,27 +20,31 @@ r = t = q = k = None
 # k : number of tuples requested in output
 
 X = dict()  # dictionary of extracted tuples, {(tuple): score}
-visited_urls = []
-used_query = []
+visited_urls = []   # list of visited links
+used_query = []     # list of tuples already used for query
 relations = {
-    '1': 'Schools_Attended',
-    '2': 'Work_For',
-    '3': 'Live_In',
-    '4': 'Top_Member_Employees'
+    # dictionary of relations: (Name, Internal Name, Subject, Object)
+    '1': ['Schools_Attended', 'per:schools_attended', ['PERSON'], ['ORGANIZATION']],
+    '2': ['Work_For', 'per:employee_of', ['PERSON'], ['ORGANIZATION']],
+    '3': ['Live_In', 'per:cities_of_residence', ['PERSON'], ['LOCATION', 'CITY', 'STATE_OR_PROVINCE', 'COUNTRY']],
+    '4': ['Top_Member_Employees', 'org:top_members/employees', ['ORGANIZATION'], ['PERSON']]
 }
+nlp = None
+entities_of_interest = ["ORGANIZATION", "PERSON", "LOCATION", "CITY", "STATE_OR_PROVINCE", "COUNTRY"]
 
-def run_query(key, cx, q):
+
+def run_query(key, cx, query):
     """
     Call Google API and receive list of results.
     Image files or non-HTML files are filtered out
 
     :param key: Google API key
     :param cx: Google Engine id
-    :param q: query in string
+    :param query: query in string
     :return: list of filtered results
     """
     service = build("customsearch", "v1", developerKey=key)
-    res = (service.cse().list(q=q, cx=cx).execute())
+    res = (service.cse().list(q=query, cx=cx).execute())
 
     filtered_res = []
     for r in res['items']:
@@ -47,76 +53,214 @@ def run_query(key, cx, q):
         filtered_res += [r]
     return filtered_res
 
+
 def process_query_results(results):
+    """
+    Loop through search results and call extract_relation() on website text
+    """
+
+    global visited_urls
+
     for i, res in enumerate(results):
         if res['link'] not in visited_urls:
-            print('URL ( ' + str(i) + ' / ' + str(len(results)) + '): ' + res['link'])
-            extract_relation(res['link'])
+            print()
+            print()
+            print('URL ( ' + str(i+1) + ' / ' + str(len(results)) + '): ' + res['link'])
+            extract_relation(get_website_text(res['link']))
             visited_urls += [res['link']]
 
+
 def get_website_text(url):
-    print('Fetching text from url ...')
+    """
+    Use BeautifulSoup to extract website text
+    """
+
+    print('     Fetching text from url ...')
     try:
         html = requests.get(url, timeout=10).text
         soup = BeautifulSoup(html, 'html.parser')
-        text = soup.get_text()
+        text = soup.get_text(separator=" ", strip=True)
+
         if len(text) > 10000:
-            print('Trimming webpage content from ' + str(len(text)) + ' to 10000 characters')
+            print('     Trimming webpage content from ' + str(len(text)) + ' to 10000 characters')
             text = text[:10000]
-        print('Webpage length (num characters): ' + str(len(text)))
-        return re.sub(r'[\t\r\n]', '', text)
+        print('     Webpage length (num characters): ' + str(len(text)))
+        text = text.replace(r"\n", ' ').replace(r"\r", ' ').replace(r"\t", ' ')
+        text = re.sub(' +', ' ', text)
+        return text
     except Exception as ex:
         return ''
 
-def extract_relation():
-    pass
+
+def extract_relation(text):
+    """
+    Extract sentence on parameter 'text'.
+    Identify entity pairs for each sentence and then apply filter based on requested relation.
+    Finally, extract relations by SpanBERT or Gemini.
+    """
+    
+    print('     Annotating the webpage using spacy...')
+    doc = nlp(text)
+
+    num_sentence = len(list(doc.sents))
+    print('     Extracted {} sentences. Processing each sentence one by one to check for presence of right pair of named entity types; if so, will run the second pipeline ...'.format(num_sentence))
+
+    num_extracted_sentence = num_relation = num_extracted_relation = 0
+    for i, sentence in enumerate(doc.sents):
+
+        # create entity pairs
+        candidate_pairs = []
+        sentence_entity_pairs = create_entity_pairs(sentence, entities_of_interest)
+        for ep in sentence_entity_pairs:
+            candidate_pairs.append({"tokens": ep[0], "subj": ep[1], "obj": ep[2]})  # e1=Subject, e2=Object
+            candidate_pairs.append({"tokens": ep[0], "subj": ep[2], "obj": ep[1]})  # e1=Object, e2=Subject
+        
+        # Filter candidate pairs based on given relation
+        candidate_pairs = [p for p in candidate_pairs if ((p["subj"][1] in relations[r][2]) & (p["obj"][1] in relations[r][3]))]
+
+        if len(candidate_pairs) > 0:
+            num_extracted_sentence += 1
+            
+            relation_preds = None
+            if extraction_method == '-spanbert':
+                # Classify Relations for all Candidate Entity Pairs using SpanBERT
+                relation_preds = spanbert.predict(candidate_pairs)  # get predictions: list of (relation, confidence) pairs
+                
+                for ex, pred in list(zip(candidate_pairs, relation_preds)):
+                    num_relation += 1
+                    # extract tuple with confidence above threshold
+                    if pred[0] == relations[r][1]:
+                       num_extracted_relation += evaluate_relation(ex, pred) 
+
+            elif extraction_method == '-gemini':
+                # TODO : fill in gemini extraction
+                pass
+        
+        i += 1
+        if i % 5 == 0:
+            print()
+            print('     Processed {} / {} sentences'.format(i, num_sentence))
+    
+    print()
+    print('Extracted annotations for  {}  out of total  {}  sentences'.format(num_extracted_sentence, num_sentence))
+    print('Relations extracted from this website: {} (Overall: {})'.format(num_extracted_relation, num_relation))
+
+
+def evaluate_relation(extract, prediction):
+    """
+    Evaluate extracted relation, based on threshold / duplication.
+    Add to extracted tuple set (X) only if conditions fulfilled.
+    """
+    print()
+    print('          === Extracted Relation ===')
+
+    flag_add_relation = False
+    if extraction_method == '-spanbert':
+        print('          Input tokens: ', extract['tokens'])
+        print('          Output Confidence: {} ; Subject: {} ; Object: {} ;'.format(prediction[1], extract['subj'][0], extract['obj'][0]))
+        this_tuple = (extract['subj'][0], extract['obj'][0])
+
+        if prediction[1] < t:
+            print('          Confidence is lower than threshold confidence. Ignoring this.')
+        elif this_tuple in X:
+            if X[this_tuple] > prediction[1]:
+                print('          Duplicate with lower confidence than existing record. Ignoring this.')
+            else:
+                flag_add_relation = True
+        else:
+            flag_add_relation = True
+
+    elif extraction_method == '-gemini':
+        # TODO : Add evaluation for gemini
+        pass
+    
+    if flag_add_relation:
+        print('          Adding to set of extracted relations')
+        X[this_tuple] = prediction[1]
+    print('          ==========')
+    return int(flag_add_relation)
+	
+
+def generate_next_query():
+    """
+    Generate next query based on extracted tuple.
+    For spanbert method, select unused tuple with highest confidence among the extracted tuples.
+    """
+    # Choose next query
+    if extraction_method == '-spanbert':
+        sorted_X = sorted(X.items(), key=lambda item: item[1], reverse=True)
+        for item in sorted_X:
+            if ' '.join(item[0]) not in used_query:
+                return ' '.join(item[0]) 
+    elif extraction_method == '-gemini':
+        # TODO: Fill in query selection method:
+        pass
+    
+    # Return None if next query cannot be generated.
+    return None
+
+
+def print_extracted_relations():
+    """
+    Print all extracted relations (X)
+    """
+    print()
+    print()
+    print('================== ALL RELATIONS for {} ( {} ) ================='.format(relations[r][1], len(X)))
+    sorted_X = sorted(X.items(), key=lambda item: item[1], reverse=True)
+    for item in sorted_X:
+        print('Confidence: {}       | Subject: {}       | Object: {}'.format(item[1], item[0][0], item[0][1]))
+
+def return_extraction_result():
+    """
+    For SpanBERT method, return top-k results
+    For Gemini method, return all results
+    """
+    if extraction_method == '-spanbert':
+        sorted_X = sorted(X.items(), key=lambda item: item[1], reverse=True)
+        return [item for item in sorted_X[:k]] 
+    elif extraction_method == '-gemini':
+        return X.keys()
+
 
 if __name__ == "__main__":
     extraction_method, api_key, engine_id, gemini_api_key = sys.argv[1:5]
-    r, t, q, k = sys.argv[5:]
+    r, t, q, k = sys.argv[5], float(sys.argv[6]), sys.argv[7], int(sys.argv[8]) 
 
-    # if extraction_method == '-spanbert':
-    #     print('Loading pre-trained spanBERT from ./pretrained_spanbert')
-    #     print()
-    #     spanbert = SpanBERT("./pretrained_spanbert")
-    # elif extraction_method == '-gemini':
-    #     pass # TODO: load library
+    if extraction_method == '-spanbert':
+        spanbert = SpanBERT("./pretrained_spanbert")
+    elif extraction_method == '-gemini':
+        pass # TODO: load gemini library
 
-    # print('____')
-    # print('Parameters:')
-    # print('Client Key	= ' + api_key)
-    # print('Engine Key	= ' + engine_id)
-    # print('Gemini Key	= ' + gemini_api_key)
-    # print('Method		= ' + extraction_method)
-    # print('Relation		= 	' + relations[r])
-    # print('Threshold	= ' + str(t))
-    # print('Query		= ' + q)
-    # print('# of Tuples	= ' + str(k))
+    print('____')
+    print('Parameters:')
+    print('Client Key	= ' + api_key)
+    print('Engine Key	= ' + engine_id)
+    print('Gemini Key	= ' + gemini_api_key)
+    print('Method		= ' + extraction_method)
+    print('Relation	= ' + relations[r][0])
+    print('Threshold	= ' + str(t))
+    print('Query		= ' + q)
+    print('# of Tuples	= ' + str(k))
 
-    # print('Loading necessary libraries; This should take a minute or so ...')
+    print('Loading necessary libraries; This should take a minute or so ...')
     nlp = spacy.load("en_core_web_lg")
 
-    text = get_website_text('https://matix.io/extract-text-from-webpage-using-beautifulsoup-and-python/')
-    doc = nlp(text)
-    for sen in doc.sents:  
-        print(sen)
-
-    # iteration_count = 0
-    # while True:
-    #     print('=========== Iteration: ' + str(iteration_count)' - Query: ' + q + ' ==========='
+    iteration_count = 0
+    this_query = q
+    while this_query is not None:
+        print('=========== Iteration: {} - Query: {} ==========='.format(iteration_count, this_query))
         
-    #     results = run_query(api_key, engine_id, query))
-    #     process_query_results(results)
+        results = run_query(api_key, engine_id, this_query)
+        used_query += [this_query]
+        process_query_results(results)
+        print_extracted_relations()
 
-    #     if len(X) >= k:
-    #         break
+        if len(X) >= k:
+            break
         
-    #     # Choose next query
-    #     if extraction_method == '-spanbert':
-    #         # TODO: Fill in query selection method
-
-    #     elif extraction_method == '-gemini'
-    #         # TODO: Fill in query selection method:
-
-    #     i = i + 1
-    # print('Total # of iterations = ' + str(iteration_count + 1))
+        iteration_count = iteration_count + 1
+        this_query = generate_next_query()
+    
+    print('Total # of iterations = ' + str(iteration_count + 1))
+    return_extraction_result()
