@@ -9,6 +9,10 @@ import spacy
 from bs4 import BeautifulSoup
 from spanbert import SpanBERT
 from spacy_help_functions import get_entities, create_entity_pairs
+from gemini_helper_6111 import get_gemini_completion
+from gemini_prompt_generator import gemini_prompt_generate
+from difflib import SequenceMatcher
+
 
 
 exclude_filetype = ['jpg', 'jpeg', 'png', 'gif', 'tiff', 'psd', 'pdf', 'eps', 'ai', 'indd', 'raw']
@@ -31,6 +35,14 @@ relations = {
 }
 nlp = None
 entities_of_interest = ["ORGANIZATION", "PERSON", "LOCATION", "CITY", "STATE_OR_PROVINCE", "COUNTRY"]
+
+
+# Below are parameters for the gemini API
+model_name = 'gemini-pro'
+max_tokens = 4096
+temperature = 0.2
+top_p = 1
+top_k = 32
 
 
 def run_query(key, cx, query):
@@ -130,12 +142,19 @@ def extract_relation(text):
                     num_relation += 1
                     # extract tuple with confidence above threshold
                     if pred[0] == relations[r][1]:
-                       num_extracted_relation += evaluate_relation(ex, pred) 
+                       num_extracted_relation += evaluate_relation(ex, pred, sentence.text)
 
             elif extraction_method == '-gemini':
-                # TODO : fill in gemini extraction
-                pass
-        
+
+                relation_preds =  get_gemini_completion(gemini_prompt_generate(relations[r][0], sentence.text), model_name, max_tokens, temperature, top_p, top_k)
+
+                for ex in relation_preds:
+                    num_relation += 1
+                    # Note that we assume the extracted gemini relations always have confidence 1.
+                    # This is because gemini does not return confidences for the extracted tuples.
+                    pred = (0, 1)
+                    num_extracted_relation += evaluate_relation(ex, pred, sentence.text)
+
         i += 1
         if i % 5 == 0:
             print()
@@ -146,42 +165,43 @@ def extract_relation(text):
     print('Relations extracted from this website: {} (Overall: {})'.format(num_extracted_relation, num_relation))
 
 
-def evaluate_relation(extract, prediction):
+def evaluate_relation(extract, prediction, sentence):
     """
     Evaluate extracted relation, based on threshold / duplication.
     Add to extracted tuple set (X) only if conditions fulfilled.
     """
     print()
-    print('          === Extracted Relation ===')
+    print('=== Extracted Relation ===')
 
     flag_add_relation = False
+
     if extraction_method == '-spanbert':
         print('          Input tokens: ', extract['tokens'])
-        print('          Output Confidence: {} ; Subject: {} ; Object: {} ;'.format(prediction[1], extract['subj'][0], extract['obj'][0]))
-        this_tuple = (extract['subj'][0], extract['obj'][0])
-
-        if prediction[1] < t:
-            print('          Confidence is lower than threshold confidence. Ignoring this.')
-        elif this_tuple in X:
-            if X[this_tuple] > prediction[1]:
-                print('          Duplicate with lower confidence than existing record. Ignoring this.')
-            else:
-                flag_add_relation = True
+    else:
+        print('Sentence: {}'.format(sentence))
+    print('Output Confidence: {} ; Subject: {} ; Object: {} ;'.format(prediction[1], extract['subj'][0], extract['obj'][0]))
+    this_tuple = (extract['subj'][0], extract['obj'][0])
+    # Note that for gemini results, prediction confidence will always be 1 i.e. the below block never executes
+    if prediction[1] < t:
+        print('Confidence is lower than threshold confidence. Ignoring this.')
+    elif this_tuple in X:
+        if extraction_method == '-gemini':
+           print('Duplicate. Ignoring this.') 
+        elif X[this_tuple] > prediction[1]:
+            print('Duplicate with lower confidence than existing record. Ignoring this.')
         else:
             flag_add_relation = True
-
-    elif extraction_method == '-gemini':
-        # TODO : Add evaluation for gemini
-        pass
+    else:
+        flag_add_relation = True
     
     if flag_add_relation:
-        print('          Adding to set of extracted relations')
+        print('Adding to set of extracted relations')
         X[this_tuple] = prediction[1]
-    print('          ==========')
+    print('==========')
     return int(flag_add_relation)
 	
 
-def generate_next_query():
+def generate_next_query(last_query):
     """
     Generate next query based on extracted tuple.
     For spanbert method, select unused tuple with highest confidence among the extracted tuples.
@@ -193,8 +213,13 @@ def generate_next_query():
             if ' '.join(item[0]) not in used_query:
                 return ' '.join(item[0]) 
     elif extraction_method == '-gemini':
-        # TODO: Fill in query selection method:
-        pass
+        # For gemini, we are going to use the extracted tuple that has a 
+        # subject with the least similarity to the last tuple. This will 
+        # ensure that we gain as much information as possible.
+        sorted_X = sorted(X.items(), key=lambda item: SequenceMatcher(None, last_query, item[0][0]).ratio())
+        for item in sorted_X:
+            if ' '.join(item[0]) not in used_query:
+                return ' '.join(item[0]) 
     
     # Return None if next query cannot be generated.
     return None
@@ -230,7 +255,8 @@ if __name__ == "__main__":
     if extraction_method == '-spanbert':
         spanbert = SpanBERT("./pretrained_spanbert")
     elif extraction_method == '-gemini':
-        pass # TODO: load gemini library
+        # Nothing to do here
+        pass 
 
     print('____')
     print('Parameters:')
@@ -260,7 +286,7 @@ if __name__ == "__main__":
             break
         
         iteration_count = iteration_count + 1
-        this_query = generate_next_query()
+        this_query = generate_next_query(this_query)
     
     print('Total # of iterations = ' + str(iteration_count + 1))
     return_extraction_result()
