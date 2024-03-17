@@ -58,12 +58,7 @@ def run_query(key, cx, query):
     service = build("customsearch", "v1", developerKey=key)
     res = (service.cse().list(q=query, cx=cx).execute())
 
-    filtered_res = []
-    for r in res['items']:
-        if (r['link'].split('.')[-1] in exclude_filetype) or ('fileFormat' in r):
-            continue
-        filtered_res += [r]
-    return filtered_res
+    return res['items']
 
 
 def process_query_results(results):
@@ -72,13 +67,26 @@ def process_query_results(results):
     """
 
     global visited_urls
-
+    
     for i, res in enumerate(results):
         if res['link'] not in visited_urls:
             print()
             print()
             print('URL ( ' + str(i+1) + ' / ' + str(len(results)) + '): ' + res['link'])
-            extract_relation(get_website_text(res['link']))
+            
+            print('     Fetching text from url ...')
+            
+            # Fetch text from website if file type is valid
+            if (res['link'].split('.')[-1] in exclude_filetype) or ('fileFormat' in res):
+               fetched_text = None
+            else:
+                fetched_text = get_website_text(res['link'])
+            
+            # Extract relation if fetched text is valid
+            if fetched_text:
+                extract_relation(fetched_text)
+            else:
+                print('Unable to fetch URL. Continuing.')
             visited_urls += [res['link']]
 
 
@@ -87,7 +95,6 @@ def get_website_text(url):
     Use BeautifulSoup to extract website text
     """
 
-    print('     Fetching text from url ...')
     try:
         html = requests.get(url, timeout=10).text
         soup = BeautifulSoup(html, 'html.parser')
@@ -101,7 +108,8 @@ def get_website_text(url):
         text = re.sub(' +', ' ', text)
         return text
     except Exception as ex:
-        return ''
+        print('Unable to fetch URL. Continuing.')
+        return None
 
 
 def extract_relation(text):
@@ -161,8 +169,8 @@ def extract_relation(text):
             print('     Processed {} / {} sentences'.format(i, num_sentence))
     
     print()
-    print('Extracted annotations for  {}  out of total  {}  sentences'.format(num_extracted_sentence, num_sentence))
-    print('Relations extracted from this website: {} (Overall: {})'.format(num_extracted_relation, num_relation))
+    print('     Extracted annotations for  {}  out of total  {}  sentences'.format(num_extracted_sentence, num_sentence))
+    print('     Relations extracted from this website: {} (Overall: {})'.format(num_extracted_relation, num_relation))
 
 
 def evaluate_relation(extract, prediction, sentence):
@@ -171,33 +179,33 @@ def evaluate_relation(extract, prediction, sentence):
     Add to extracted tuple set (X) only if conditions fulfilled.
     """
     print()
-    print('=== Extracted Relation ===')
+    print('          === Extracted Relation ===')
 
     flag_add_relation = False
 
     if extraction_method == '-spanbert':
         print('          Input tokens: ', extract['tokens'])
     else:
-        print('Sentence: {}'.format(sentence))
-    print('Output Confidence: {} ; Subject: {} ; Object: {} ;'.format(prediction[1], extract['subj'][0], extract['obj'][0]))
+        print('          Sentence: {}'.format(sentence))
+    print('          Output Confidence: {} ; Subject: {} ; Object: {} ;'.format(prediction[1], extract['subj'][0], extract['obj'][0]))
     this_tuple = (extract['subj'][0], extract['obj'][0])
     # Note that for gemini results, prediction confidence will always be 1 i.e. the below block never executes
     if prediction[1] < t:
-        print('Confidence is lower than threshold confidence. Ignoring this.')
+        print('          Confidence is lower than threshold confidence. Ignoring this.')
     elif this_tuple in X:
         if extraction_method == '-gemini':
-           print('Duplicate. Ignoring this.') 
+           print('          Duplicate. Ignoring this.') 
         elif X[this_tuple] > prediction[1]:
-            print('Duplicate with lower confidence than existing record. Ignoring this.')
+            print('          Duplicate with lower confidence than existing record. Ignoring this.')
         else:
             flag_add_relation = True
     else:
         flag_add_relation = True
     
     if flag_add_relation:
-        print('Adding to set of extracted relations')
+        print('          Adding to set of extracted relations')
         X[this_tuple] = prediction[1]
-    print('==========')
+    print('          ==========')
     return int(flag_add_relation)
 	
 
@@ -234,7 +242,7 @@ def print_extracted_relations():
     print('================== ALL RELATIONS for {} ( {} ) ================='.format(relations[r][1], len(X)))
     sorted_X = sorted(X.items(), key=lambda item: item[1], reverse=True)
     for item in sorted_X:
-        print('Confidence: {}       | Subject: {}       | Object: {}'.format(item[1], item[0][0], item[0][1]))
+        print('Confidence: {:.10f}       | Subject: {}       | Object: {}'.format(item[1], item[0][0], item[0][1]))
 
 def return_extraction_result():
     """

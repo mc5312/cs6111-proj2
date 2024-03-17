@@ -23,7 +23,7 @@ def format_gemini_output(gemini_output):
             tups += [{'subj': (subj, None), 'obj': (obj, None)}]
         return tups
     except:
-        print('EXCEPTION: CANNOT PARSE GEMINI OUTPUT: "{}"'.format(gemini_output))
+        print('          EXCEPTION: CANNOT PARSE GEMINI OUTPUT: "{}"'.format(gemini_output))
         return []
 
 
