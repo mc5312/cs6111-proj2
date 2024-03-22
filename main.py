@@ -14,7 +14,6 @@ from gemini_prompt_generator import gemini_prompt_generate
 from difflib import SequenceMatcher
 
 
-
 exclude_filetype = ['jpg', 'jpeg', 'png', 'gif', 'tiff', 'psd', 'pdf', 'eps', 'ai', 'indd', 'raw']
 extraction_method = api_key = engine_id = gemini_api_key = None
 r = t = q = k = None
@@ -33,22 +32,25 @@ relations = {
     '3': ['Live_In', 'per:cities_of_residence', ['PERSON'], ['LOCATION', 'CITY', 'STATE_OR_PROVINCE', 'COUNTRY']],
     '4': ['Top_Member_Employees', 'org:top_members/employees', ['ORGANIZATION'], ['PERSON']]
 }
-nlp = None
+
+# ===== varaibles for Spacy ====
+nlp = None  # tokenizer
 entities_of_interest = ["ORGANIZATION", "PERSON", "LOCATION", "CITY", "STATE_OR_PROVINCE", "COUNTRY"]
+# ==============================
 
 
-# Below are parameters for the gemini API
+# ===== parameters for Gemini API =====
 model_name = 'gemini-pro'
 max_tokens = 4096
 temperature = 0.2
 top_p = 1
 top_k = 32
+# =====================================
 
 
 def run_query(key, cx, query):
     """
     Call Google API and receive list of results.
-    Image files or non-HTML files are filtered out
 
     :param key: Google API key
     :param cx: Google Engine id
@@ -63,7 +65,11 @@ def run_query(key, cx, query):
 
 def process_query_results(results):
     """
-    Loop through search results and call extract_relation() on website text
+    Loop through search results and filter out unwanted file type.
+    Call get_website_text() to fetch website text.
+    Call extract_relation() on website text, if website text is not None.
+
+    :param results: list of search results returned from Google
     """
 
     global visited_urls
@@ -78,7 +84,7 @@ def process_query_results(results):
             
             # Fetch text from website if file type is valid
             if (res['link'].split('.')[-1] in exclude_filetype) or ('fileFormat' in res):
-               fetched_text = None
+                fetched_text = None
             else:
                 fetched_text = get_website_text(res['link'])
             
@@ -92,7 +98,9 @@ def process_query_results(results):
 
 def get_website_text(url):
     """
-    Use BeautifulSoup to extract website text
+    Use BeautifulSoup to extract website text.
+
+    :param url: a link from a search result
     """
 
     try:
@@ -117,6 +125,8 @@ def extract_relation(text):
     Extract sentence on parameter 'text'.
     Identify entity pairs for each sentence and then apply filter based on requested relation.
     Finally, extract relations by SpanBERT or Gemini.
+
+    :param text: fetched text from website
     """
     
     print('     Annotating the webpage using spacy...')
@@ -128,7 +138,7 @@ def extract_relation(text):
     num_extracted_sentence = num_relation = num_extracted_relation = 0
     for i, sentence in enumerate(doc.sents):
 
-        # create entity pairs
+        # Create entity pairs
         candidate_pairs = []
         sentence_entity_pairs = create_entity_pairs(sentence, entities_of_interest)
         for ep in sentence_entity_pairs:
@@ -154,7 +164,14 @@ def extract_relation(text):
 
             elif extraction_method == '-gemini':
 
-                relation_preds =  get_gemini_completion(gemini_prompt_generate(relations[r][0], sentence.text), model_name, max_tokens, temperature, top_p, top_k)
+                relation_preds =  get_gemini_completion(
+                    gemini_prompt_generate(relations[r][0], sentence.text), 
+                    model_name, 
+                    max_tokens, 
+                    temperature, 
+                    top_p, 
+                    top_k
+                    )
 
                 for ex in relation_preds:
                     num_relation += 1
@@ -177,6 +194,12 @@ def evaluate_relation(extract, prediction, sentence):
     """
     Evaluate extracted relation, based on threshold / duplication.
     Add to extracted tuple set (X) only if conditions fulfilled.
+
+    :param extract: extracted relation from Spacy
+    :param prediction: 
+        for spanbert, prediction is (relation, confidence) of the extracted tuple
+        for gemini, prediction is always (0, 1)
+    :param sentence: sentence under evaluation
     """
     print()
     print('          === Extracted Relation ===')
@@ -189,10 +212,14 @@ def evaluate_relation(extract, prediction, sentence):
         print('          Sentence: {}'.format(sentence))
     print('          Output Confidence: {} ; Subject: {} ; Object: {} ;'.format(prediction[1], extract['subj'][0], extract['obj'][0]))
     this_tuple = (extract['subj'][0], extract['obj'][0])
-    # Note that for gemini results, prediction confidence will always be 1 i.e. the below block never executes
+    
+    # For spanbert, add this_tuple to X if it is not a duplication or has higher confidence
+    # For gemini, add this_tuple to X if it is not a duplication
     if prediction[1] < t:
+        # Note that for gemini results, prediction confidence will always be 1 i.e. this block never executes
         print('          Confidence is lower than threshold confidence. Ignoring this.')
     elif this_tuple in X:
+        # Handle duplication
         if extraction_method == '-gemini':
            print('          Duplicate. Ignoring this.') 
         elif X[this_tuple] > prediction[1]:
@@ -213,6 +240,9 @@ def generate_next_query(last_query):
     """
     Generate next query based on extracted tuple.
     For spanbert method, select unused tuple with highest confidence among the extracted tuples.
+    For gemini method, select unused tuple with least similarity to the last used query.
+
+    :param last_query: last query used
     """
     # Choose next query
     if extraction_method == '-spanbert':
@@ -261,6 +291,7 @@ if __name__ == "__main__":
     r, t, q, k = sys.argv[5], float(sys.argv[6]), sys.argv[7], int(sys.argv[8]) 
 
     if extraction_method == '-spanbert':
+        # Load pre-trained spanbert model
         spanbert = SpanBERT("./pretrained_spanbert")
     elif extraction_method == '-gemini':
         # Nothing to do here
