@@ -18,7 +18,7 @@ def format_gemini_output(gemini_output):
             tups += [{'subj': (subj, None), 'obj': (obj, None)}]
         return tups
     except:
-        print('          EXCEPTION: CANNOT PARSE GEMINI OUTPUT: "{}"'.format(gemini_output))
+        # print('          EXCEPTION: CANNOT PARSE GEMINI OUTPUT: "{}"'.format(gemini_output))
         return []
 
 
@@ -54,3 +54,22 @@ def get_gemini_completion(prompt, GEMINI_API_KEY, model_name, max_tokens, temper
     response = model.generate_content(prompt, generation_config=generation_config)
     
     return format_gemini_output(response.text)
+
+
+from gemini_prompt_generator4 import gemini_prompt_generate
+
+model_name = 'gemini-pro'
+max_tokens = 4096
+temperature = 0.2
+top_p = 1
+top_k = 32
+print(get_gemini_completion(
+    gemini_prompt_generate('Schools_Attended', 'Dynamic Data Mining: A New Architecture for Data with High Dimensionality by Sergey Brin and Lawrence Page.'), 
+    'AIzaSyB98XWvUOx6i_S29uu3jhoV6rbhA2CGuRo',
+    model_name, 
+    max_tokens, 
+    temperature, 
+    top_p, 
+    top_k
+    )
+)

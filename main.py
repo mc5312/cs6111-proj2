@@ -74,7 +74,7 @@ def process_query_results(results):
 
     global visited_urls
     
-    for i, res in enumerate(results[:5]):
+    for i, res in enumerate(results):
         if res['link'] not in visited_urls:
             print()
             print()

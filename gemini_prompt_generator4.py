@@ -8,7 +8,6 @@ def gemini_prompt_generate(relation_type, sentence):
                 """,
             'output': """
                 The extracted relation should be in this format: "[PERSON| RELATIONSHIP| ORGANIZATION]"
-                Skip an instance if the name of ORGANIZATION is not provided in the sentence.
                 """
         },
         'Work_For': {
@@ -50,6 +49,7 @@ def gemini_prompt_generate(relation_type, sentence):
         A sample output for extracting 'Work_for' relationship in sentence 'Bill and Carl both work for Twitter' is as follows:
         [Bill| Work_For| Twitter]
         [Carl| Work_For| Twitter]
+
         """ 
     
     prompt += relationship_spec[relation_type]['description']
@@ -67,5 +67,8 @@ def gemini_prompt_generate(relation_type, sentence):
         '{}'
 
         """.format(relation_type, sentence)
-
+    
+    prompt += """
+        If there is SUBJECT or OBJECT is missing in the sentence, output 'No relationship found'
+        """
     return prompt
