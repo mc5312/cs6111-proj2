@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from spanbert import SpanBERT
 from spacy_help_functions import get_entities, create_entity_pairs
 from gemini_helper_6111 import get_gemini_completion
-from gemini_prompt_generator import gemini_prompt_generate
+from gemini_prompt_generator4 import gemini_prompt_generate
 from difflib import SequenceMatcher
 
 
@@ -74,7 +74,7 @@ def process_query_results(results):
 
     global visited_urls
     
-    for i, res in enumerate(results):
+    for i, res in enumerate(results[:5]):
         if res['link'] not in visited_urls:
             print()
             print()
@@ -149,10 +149,12 @@ def extract_relation(text):
         candidate_pairs = [p for p in candidate_pairs if ((p["subj"][1] in relations[r][2]) & (p["obj"][1] in relations[r][3]))]
 
         if len(candidate_pairs) > 0:
-            num_extracted_sentence += 1
             
             relation_preds = None
             if extraction_method == '-spanbert':
+                
+                num_extracted_sentence += 1
+
                 # Classify Relations for all Candidate Entity Pairs using SpanBERT
                 relation_preds = spanbert.predict(candidate_pairs)  # get predictions: list of (relation, confidence) pairs
                 
@@ -166,12 +168,15 @@ def extract_relation(text):
 
                 relation_preds =  get_gemini_completion(
                     gemini_prompt_generate(relations[r][0], sentence.text), 
+                    gemini_api_key,
                     model_name, 
                     max_tokens, 
                     temperature, 
                     top_p, 
                     top_k
                     )
+
+                if len(relation_preds): num_extracted_sentence += 1
 
                 for ex in relation_preds:
                     num_relation += 1
@@ -271,8 +276,13 @@ def print_extracted_relations():
     print()
     print('================== ALL RELATIONS for {} ( {} ) ================='.format(relations[r][1], len(X)))
     sorted_X = sorted(X.items(), key=lambda item: item[1], reverse=True)
-    for item in sorted_X:
-        print('Confidence: {:.10f}       | Subject: {}       | Object: {}'.format(item[1], item[0][0], item[0][1]))
+    if extraction_method == '-spanbert':
+        for item in sorted_X:
+            print('Confidence: {:.10f}       | Subject: {}       | Object: {}'.format(item[1], item[0][0], item[0][1]))
+    elif extraction_method == '-gemini':
+        for item in sorted_X:
+            print('Subject: {}       | Object: {}'.format(item[0][0], item[0][1]))
+
 
 def return_extraction_result():
     """
