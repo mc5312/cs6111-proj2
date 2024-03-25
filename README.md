@@ -12,7 +12,7 @@ Files|
 
 (4) spanbert.py - contains code for interacting with a pretrained spanBERT classifier 
 
-(5) gemini_helper.py - contains code for calling the google gemini API
+(5) gemini_helper_6111.py - contains code for calling the google gemini API
 
 (6) README.md - this file
 
@@ -71,6 +71,8 @@ Standard Libraries
 ------------------
 How to Run Program|
 -------------------
+
+IMPORTANT: Files (1-5) and the provided folder "pretrained_spanbert" have to be placed in the same directory.
 
 python3 main.py [-spanbert|-gemini] <google api key> <google engine id> <google gemini api key> <r> <t> <q> <k>
 

@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from spanbert import SpanBERT
 from spacy_help_functions import get_entities, create_entity_pairs
 from gemini_helper_6111 import get_gemini_completion
-from gemini_prompt_generator4 import gemini_prompt_generate
+from gemini_prompt_generator import gemini_prompt_generate
 from difflib import SequenceMatcher
 
 
