@@ -72,7 +72,7 @@ Standard Libraries
 How to Run Program|
 -------------------
 
-python3 project2.py [-spanbert|-gemini] <google api key> <google engine id> <google gemini api key> <r> <t> <q> <k>
+python3 main.py [-spanbert|-gemini] <google api key> <google engine id> <google gemini api key> <r> <t> <q> <k>
 
 Note that the parameters are given in the project 2 specification.  
 
@@ -81,7 +81,7 @@ relation Schools_Attended, and 10 requested tuples, run:
 
 python3 main.py -spanbert AIzaSyC8EbccVhwPEcQ-oFeFgRTZ1DgfVAOg6-8 9604022c4b8b04d7e AIzaSyB98XWvUOx6i_S29uu3jhoV6rbhA2CGuRo 1 0.7 'sergey brin stanford' 10
 
-To execute the same ISA task, but using gemini, run:
+To execute the same ISE task, but using gemini, run:
 
 python3 main.py -gemini AIzaSyC8EbccVhwPEcQ-oFeFgRTZ1DgfVAOg6-8 9604022c4b8b04d7e AIzaSyB98XWvUOx6i_S29uu3jhoV6rbhA2CGuRo 1 0.7 'sergey brin stanford' 10
 
@@ -93,21 +93,20 @@ General Description|
 
 We will first delve into the general structure of main.py. 
 
-return_extraction_result() acts as the main function, running when the program starts. The function parses the command line
-arguments, initializes spaCy (in addition to SpanBERT if -spanbert is specfied), sets the seed query, and starts the main while loop.
+When the program starts, the main function parses the command line arguments, initializes spaCy (in addition to SpanBERT if -spanbert is specfied), sets the seed query, and starts the main while loop.
 
-The main while loop executes the core logic of the LSE algorithm: use a query tuple q to retrieve documents, parse those documents for more tuples, query
-for more documents using one of the retrived tuples, and repeat this process until k tuples have been extracted. If the LSE algorithm does retrieve k tuples after the 
+The main while loop executes the core logic of the ISE algorithm: use a query tuple q to retrieve documents, parse those documents for more tuples, query
+for more documents using one of the retrived tuples, and repeat this process until k tuples have been extracted. If the ISE algorithm does retrieve k tuples after the 
 previous iteration, we use generate_next_query() to obtain the tuple to be used for querying in the next iteration. If gemini is being used, we pick the next query tuple
 based on its dissimilarity with the current query tuple. We can sort the tuples based on dissimilarity with the current query using difflib's SequenceMatcher(). SequenceMathcher()
 returns a score that estimates how similar two strings are. Thus, using this function, we can choose the next tuple that will approximately provide the most different search results 
-from the current tuple. If SpanBERT is being used, we use the tuple with the higest confidence. 
+from the current tuple. If SpanBERT is being used, we use the unused tuple with the higest confidence. 
  
 When the main loop issues a query to the web, run_query() is used. The raw query results are passed to process_query_reults(), which cleans the search results, filtering out unwanted file types along the way. process_query_results() also calls get_website_text(), which uses BeautifulSoup to extract and clean the website text. Finally, this website text is passed
 to extract_relation(), which does all of the heavy lifting of extracting tuples. 
 
 extract_relation() is essential to the program, as it performs the actual extraction for the requested relation. First, using the create_candidate_pairs() helper function from spacy_help_functions.py, entity pairs are extracted for the current sentence. For each of these pairs, two symmetrical candidate_pairs are created where the subject and object have their roles reversed. Once the
-intial set of candiate_pairs is generated, we filter this set so that it only includes those candidate_pairs that have an object and subject corresponding to the requested relation. For example,if the use requested the relation Work_For, we make sure that the subject is PERSON and the Object is ORGANIZATION. If this step is not taken, then too many sentences will wastefully be passed
+intial set of candiate_pairs is generated, we filter this set so that it only includes those candidate_pairs that have an object and subject corresponding to the requested relation. For example, if the user requested the relation Work_For, we make sure that the subject is PERSON and the Object is ORGANIZATION. If this step is not taken, then too many sentences will wastefully be passed
 to either SpanBERT or gemini, which is computationally inefficient and perhaps economically wasteful.
 
 This final set of candidate_pairs are passed to either SpanBERT or gemini for a prediction. 
@@ -116,15 +115,15 @@ If gemini is used, the function get_gemini_completion() is called to retrieve tu
 that unlike SpanBERT, gemini simply takes the current sentence as a string, not pre-procecesed candidate pairs. The reason why we perform the filtering on the cadidate_pairs
 before calling gemini is because we still only want to call the API if we have identified a possible relationship in the current sentence. get_gemini_completion(), defined in 
 gemini_helper_6111.py, calls the gemini API with a prompt given as an argument, and formats the results. Instead of using different prompts for each relation extraction task, we used
-oen large prompt that contains a small number of examples for each realtion type. We found that one large prompt that lists each extraction task performs better than several seperate prompts. 
-It appears that gemini learns how to extract certain relations more effectively when it also sees different relation tasks as a part of the prompt. We believe that this occurs because
+one large prompt that contains a small number of examples for each realtion type. We found that one large prompt that lists each extraction task performs better than several seperate prompts. 
+It appears that gemini learns how to extract certain relations more effectively when it also sees different relation tasks as a part of the prompt. We believe that this occurs because it
 learns how to differentiate between different extraction tasks. To format the prompt for the current sentence, we use gemini_prompt_generator.py's gemini_prompt_generate().
 
 If SpanBERT is used, the candidate_pairs are passed to spanbert.predict() which takes input in the exact format of candidate_pairs and provides a predicted confidence for each of the candiates.
 Note that gemini provides no confidence estimate of the extracted tuples, so we always assume a confidence of 1 for gemini.
 
 After obtaining predictions from either SpanBERT or gemini, we pass the candidate_pairs, or tuples, that were deemed matches by the classifier to evaluate_relation(). evaluate_relation()
-checks if a tuple has a confidence above the desired threshold and if the extracted tuple is a duplicate i.e. we already have the tuple in our set of extracted relations. If these checks pass,
+checks if a tuple has a confidence above the desired threshold and if the extracted tuple is a duplicate, i.e. we already have the tuple in our set of extracted relations. If these checks pass,
 the tuple is added to the set of extracted relations.
 
-If more than k tuples are not extracted after the current iteration of the ISE algorithm, we select a tuple, that hasn't been previusly used for querying, from the set of extracted tuples for the next query.
+If more than k tuples are not extracted after the current iteration of the ISE algorithm, we select a tuple, that hasn't been previously used for querying, from the set of extracted tuples for the next query.
